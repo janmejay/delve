@@ -4,6 +4,7 @@ package terminal
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/parser"
@@ -181,6 +182,11 @@ Called with more arguments it will execute a command on the specified goroutine.
 		{aliases: []string{"print", "p"}, allowedPrefixes: onPrefix, cmdFn: printVar, helpMsg: `Evaluate an expression.
 
 	[goroutine <n>] [frame <m>] print <expression>
+
+See $GOPATH/src/github.com/derekparker/delve/Documentation/cli/expr.md for a description of supported expressions.`},
+		{aliases: []string{"jsondump", "jd"}, cmdFn: jdVar, helpMsg: `Evaluate an expression.
+
+	jsondump <expression> <path> [<MaxVariableRecurse> <MaxStringLen> <MaxStructFields>]
 
 See $GOPATH/src/github.com/derekparker/delve/Documentation/cli/expr.md for a description of supported expressions.`},
 		{aliases: []string{"whatis"}, cmdFn: whatisCommand, helpMsg: `Prints type of an expression.
@@ -1194,6 +1200,72 @@ func printVar(t *Term, ctx callContext, args string) error {
 	}
 
 	fmt.Println(val.MultilineString(""))
+	return nil
+}
+
+func applyJdArgs(args string, c *api.LoadConfig) (string, string, error) {
+	v := strings.SplitN(args, " ", 6)
+	var err error
+	dumpPath := ""
+	if len(v) >= 2 {
+		dumpPath = v[1]
+	}
+	if len(v) >= 3 {
+		c.MaxVariableRecurse, err = strconv.Atoi(v[2])
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if len(v) >= 4 {
+		c.MaxStringLen, err = strconv.Atoi(v[3])
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if len(v) == 5 {
+		c.MaxArrayValues, err = strconv.Atoi(v[4])
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if len(v) == 6 {
+		c.MaxStructFields, err = strconv.Atoi(v[5])
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return v[0], dumpPath, nil
+}
+
+func jdVar(t *Term, ctx callContext, args string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("not enough arguments")
+	}
+	cfg := t.loadConfig()
+	args, dumpPath, err := applyJdArgs(args, &cfg)
+	if err != nil {
+		return err
+	}
+
+	val, err := t.client.EvalVariable(ctx.Scope, args, cfg)
+	if err != nil {
+		return err
+	}
+
+	b, err := json.Marshal(val)
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(dumpPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(b)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %d bytes to %s\n", len(b), dumpPath)
 	return nil
 }
 
